@@ -57,27 +57,21 @@ def scale_coords_landmarks(img1_shape, coords, img0_shape, ratio_pad=None):
     return coords
 
 def show_results(img, xyxy, conf, landmarks, class_num):
-    h,w,c = img.shape
+    h, w, c = img.shape
     tl = 1 or round(0.002 * (h + w) / 2) + 1  # line/font thickness
     x1 = int(xyxy[0])
     y1 = int(xyxy[1])
     x2 = int(xyxy[2])
     y2 = int(xyxy[3])
     img = img.copy()
-    
-    cv2.rectangle(img, (x1,y1), (x2, y2), (0,255,0), thickness=tl, lineType=cv2.LINE_AA)
 
-    clors = [(255,0,0),(0,255,0),(0,0,255),(255,255,0),(0,255,255)]
-
-    for i in range(5):
-        point_x = int(landmarks[2 * i])
-        point_y = int(landmarks[2 * i + 1])
-        cv2.circle(img, (point_x, point_y), tl+1, clors[i], -1)
+    cv2.rectangle(img, (x1, y1), (x2, y2), (0, 255, 0), thickness=tl, lineType=cv2.LINE_AA)
 
     tf = max(tl - 1, 1)  # font thickness
     label = str(conf)[:5]
     cv2.putText(img, label, (x1, y1 - 2), 0, tl / 3, [225, 255, 255], thickness=tf, lineType=cv2.LINE_AA)
     return img
+
 
 
 def detect(
@@ -91,10 +85,10 @@ def detect(
     view_img
 ):
     # Load model
-    img_size = 640
+    img_size = 480
     conf_thres = 0.6
     iou_thres = 0.5
-    imgsz=(640, 640)
+    imgsz=(480, 480)
     
     # Directories
     save_dir = increment_path(Path(project) / name, exist_ok=exist_ok)  # increment run
@@ -112,7 +106,7 @@ def detect(
     else:
         print('loading images', source)
         dataset = LoadImages(source, img_size=imgsz)
-        bs = 1  # batch_size
+        bs = 4  # batch_size
     vid_path, vid_writer = [None] * bs, [None] * bs
     
     for path, im, im0s, vid_cap in dataset:
@@ -209,17 +203,23 @@ def detect(
 
 
 if __name__ == '__main__':
+    import time
+    start_time = time.time()
+    
     parser = argparse.ArgumentParser()
-    parser.add_argument('--weights', nargs='+', type=str, default='runs/train/exp5/weights/last.pt', help='model.pt path(s)')
-    parser.add_argument('--source', type=str, default='0', help='source')  # file/folder, 0 for webcam
-    parser.add_argument('--img-size', type=int, default=640, help='inference size (pixels)')
+    parser.add_argument('--weights', nargs='+', type=str, default='weights/yolov5n-face.pt', help='model.pt path(s)')
+    parser.add_argument('--source', type=str, default='./myimages', help='source')  # file/folder, 0 for webcam
+    parser.add_argument('--img-size', type=int, default=480, help='inference size (pixels)')
     parser.add_argument('--project', default=ROOT / 'runs/detect', help='save results to project/name')
     parser.add_argument('--name', default='exp', help='save results to project/name')
     parser.add_argument('--exist-ok', action='store_true', help='existing project/name ok, do not increment')
-    parser.add_argument('--save-img', action='store_true', help='save results')
+    parser.add_argument('--save-img', default=True, action='store_true', help='save results')
     parser.add_argument('--view-img', action='store_true', help='show results')
     opt = parser.parse_args()
     
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model = load_model(opt.weights, device)
     detect(model, opt.source, device, opt.project, opt.name, opt.exist_ok, opt.save_img, opt.view_img)
+
+    end_time = time.time()  # 종료 시간
+    print(f"\n총 실행 시간: {end_time - start_time:.2f}초")

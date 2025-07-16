@@ -8,6 +8,7 @@ from models.common import Conv, DWConv
 from utils.google_utils import attempt_download
 
 
+
 class CrossConv(nn.Module):
     # Cross Convolution Downsample
     def __init__(self, c1, c2, k=3, s=1, g=1, e=1.0, shortcut=False):
@@ -115,7 +116,7 @@ def attempt_load(weights, map_location=None):
     model = Ensemble()
     for w in weights if isinstance(weights, list) else [weights]:
         attempt_download(w)
-        model.append(torch.load(w, map_location=map_location)['model'].float().fuse().eval())  # load FP32 model
+        model.append(torch.load(w, map_location=map_location, weights_only=False)['model'].float().fuse().eval())  # load FP32 model
 
     # Compatibility updates
     for m in model.modules():
