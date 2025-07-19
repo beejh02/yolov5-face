@@ -35,17 +35,20 @@ def show_results(img, xyxy, conf, class_num, filename):
     x2 = int(xyxy[2])
     y2 = int(xyxy[3])
 
-    x = x1; y = y1; w = x2 - x1; h = y2 - y1
+    x = x1; y = y1; w1 = x2 - x; h1 = y2 - y
     
-    roi = img[y:y+h, x:x+w].tobytes()
-    nonce = (int(filename.replace(".jpg", ""))).to_bytes(8)
+    roi = img[y:y+h1, x:x+w1].tobytes()
+    nonce = (int(filename.replace(".jpg", ""))).to_bytes(8, byteorder='big') # get file name to num
+
+    img_enc = img.copy()
+    img_dec = img_enc.copy()
     
     cipher = ChaCha20.new(key=key, nonce=nonce)
     encrypted = cipher.encrypt(roi)
 
-    img_enc = img.copy()
-    roi_encrypted = np.frombuffer(encrypted, dtype=np.uint8).reshape((h, w, 3))
-    img_enc[y:y+h, x:x+w] = roi_encrypted
+    
+    roi_encrypted = np.frombuffer(encrypted, dtype=np.uint8).reshape((h1, w1, 3)) # 재귀적으로 수행 필요
+    img_enc[y:y+h1, x:x+w1] = roi_encrypted
 
     enc_output_path = os.path.join(enc_dir, f"enc_{filename}")
     cv2.imwrite(enc_output_path, img_enc)
@@ -54,11 +57,11 @@ def show_results(img, xyxy, conf, class_num, filename):
 
     cipher_dec = ChaCha20.new(key=key, nonce=nonce)
     decrypted = cipher_dec.decrypt(encrypted)
-    roi_decrypted = np.frombuffer(decrypted, dtype=np.uint8).reshape((h, w, 3))
+    roi_decrypted = np.frombuffer(decrypted, dtype=np.uint8).reshape((h1, w1, 3))
 
     # 복호화된 ROI 삽입
     img_dec = img_enc.copy()
-    img_dec[y:y+h, x:x+w] = roi_decrypted
+    img_dec[y:y+h1, x:x+w1] = roi_decrypted
 
     # 복호화 이미지 저장
     dec_output_path = os.path.join(dec_dir, f"dec_{filename}")
@@ -179,7 +182,7 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--weights', nargs='+', type=str, default='weights/yolov5n-face.pt', help='model.pt path(s)')
     parser.add_argument('--source', type=str, default='./myimages', help='source')  # file/folder, 0 for webcam
-    parser.add_argument('--img-size', type=int, default=480, help='inference size (pixels)')
+    parser.add_argument('--img-size', type=int, default=640, help='inference size (pixels)')
     parser.add_argument('--project', default=os.path.join(ROOT, 'runs', 'detect'), help='save results to project/name')
     parser.add_argument('--name', default='exp', help='save results to project/name')
     parser.add_argument('--exist-ok', action='store_true', help='existing project/name ok, do not increment')
