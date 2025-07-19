@@ -41,7 +41,6 @@ def show_results(img, xyxy, conf, class_num):
     return img
 
 
-
 def detect(
     model,
     source,
@@ -70,11 +69,11 @@ def detect(
     if webcam:
         print('loading streams:', source)
         dataset = LoadStreams(source, img_size=imgsz)
-        bs = 1  # batch_size
+        bs = 1
     else:
         print('loading images', source)
         dataset = LoadImages(source, img_size=imgsz)
-        bs = 4  # batch_size
+        bs = 1
     vid_path, vid_writer = [None] * bs, [None] * bs
     
     for path, im, im0s, vid_cap in dataset:
@@ -140,7 +139,6 @@ def detect(
             
             if view_img:
                 cv2.imshow('result', im0)
-                k = cv2.waitKey(1)
                     
             # Save results (image with detections)
             if save_img:
