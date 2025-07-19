@@ -27,56 +27,51 @@ def load_model(weights, device):
     return model
 
 
-def show_results(img, dets, confs, class_nums, filename):
+def show_results(img, xyxy, conf, class_num, filename):
     h, w, c = img.shape
     tl = 1 or round(0.002 * (h + w) / 2) + 1  # line/font thickness
+    x1 = int(xyxy[0])
+    y1 = int(xyxy[1])
+    x2 = int(xyxy[2])
+    y2 = int(xyxy[3])
+
+    x = x1; y = y1; w = x2 - x1; h = y2 - y1
     
-    nonce = (int(filename.replace(".jpg", ""))).to_bytes(8, byteorder='big') # get file name to num
+    roi = img[y:y+h, x:x+w].tobytes()
+    nonce = (int(filename.replace(".jpg", ""))).to_bytes(8)
+    
+    cipher = ChaCha20.new(key=key, nonce=nonce)
+    encrypted = cipher.encrypt(roi)
 
     img_enc = img.copy()
-    img_dec = img_enc.copy()
-    
-    for i, det in enumerate(dets):
-        x1 = int(det[0])
-        y1 = int(det[1])
-        x2 = int(det[2])
-        y2 = int(det[3])
+    roi_encrypted = np.frombuffer(encrypted, dtype=np.uint8).reshape((h, w, 3))
+    img_enc[y:y+h, x:x+w] = roi_encrypted
 
-        x = x1; y = y1; w1 = x2 - x; h1 = y2 - y
-
-        try:
-            roi = img[y:y+h1, x:x+w1].tobytes()
-
-            # encrypt the ROI
-            cipher = ChaCha20.new(key=key, nonce=nonce)
-            encrypted = cipher.encrypt(roi)
-            roi_encrypted = np.frombuffer(encrypted, dtype=np.uint8).reshape((h1, w1, 3))
-            img_enc[y:y+h1, x:x+w1] = roi_encrypted
-
-            # decrypt the ROI
-            cipher_dec = ChaCha20.new(key=key, nonce=nonce)
-            decrypted = cipher_dec.decrypt(encrypted)
-            roi_decrypted = np.frombuffer(decrypted, dtype=np.uint8).reshape((h1, w1, 3))
-            img_dec[y:y+h1, x:x+w1] = roi_decrypted
-
-            cv2.rectangle(img, (x1, y1), (x2, y2), (0, 255, 0), thickness=tl, lineType=cv2.LINE_AA)
-
-        except Exception as e:
-            print(f"Error processing ROI: {e}")
-            continue
-
-    # save the images
     enc_output_path = os.path.join(enc_dir, f"enc_{filename}")
-    dec_output_path = os.path.join(dec_dir, f"dec_{filename}")
     cv2.imwrite(enc_output_path, img_enc)
-    cv2.imwrite(dec_output_path, img_dec)
-
     print(f"✅ 암호화 저장: {enc_output_path}")
+
+
+    cipher_dec = ChaCha20.new(key=key, nonce=nonce)
+    decrypted = cipher_dec.decrypt(encrypted)
+    roi_decrypted = np.frombuffer(decrypted, dtype=np.uint8).reshape((h, w, 3))
+
+    # 복호화된 ROI 삽입
+    img_dec = img_enc.copy()
+    img_dec[y:y+h, x:x+w] = roi_decrypted
+
+    # 복호화 이미지 저장
+    dec_output_path = os.path.join(dec_dir, f"dec_{filename}")
+    cv2.imwrite(dec_output_path, img_dec)
     print(f"✅ 복호화 저장: {dec_output_path}")
+
+
     print("🔑 Key:", key.hex())
     print("🔓 Nonce:", nonce.hex())
     
+    cv2.rectangle(img, (x1, y1), (x2, y2), (0, 255, 0), thickness=tl, lineType=cv2.LINE_AA)
     return img
+
 
 def detect(model, source, device, project, name, exist_ok, save_img, view_img):
     img_size = 640
@@ -139,10 +134,12 @@ def detect(model, source, device, project, name, exist_ok, save_img, view_img):
 
             if len(det):
                 det[:, :4] = scale_coords(img.shape[2:], det[:, :4], im0.shape).round()
-                det = det.cpu().numpy()
-                confs = det[:, 4]
-                class_nums = det[:, 15]
-                im0 = show_results(im0, det[:, :4], confs, class_nums, filename)
+
+                for j in range(det.size()[0]):
+                    xyxy = det[j, :4].view(-1).tolist()
+                    conf = det[j, 4].cpu().numpy()
+                    class_num = det[j, 15].cpu().numpy()
+                    im0 = show_results(im0, xyxy, conf, class_num, filename)
 
             if view_img:
                 cv2.imshow('result', im0)
@@ -182,7 +179,7 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--weights', nargs='+', type=str, default='weights/yolov5n-face.pt', help='model.pt path(s)')
     parser.add_argument('--source', type=str, default='./myimages', help='source')  # file/folder, 0 for webcam
-    parser.add_argument('--img-size', type=int, default=640, help='inference size (pixels)')
+    parser.add_argument('--img-size', type=int, default=480, help='inference size (pixels)')
     parser.add_argument('--project', default=os.path.join(ROOT, 'runs', 'detect'), help='save results to project/name')
     parser.add_argument('--name', default='exp', help='save results to project/name')
     parser.add_argument('--exist-ok', action='store_true', help='existing project/name ok, do not increment')
