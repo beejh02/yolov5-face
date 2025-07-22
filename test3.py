@@ -8,7 +8,6 @@ import json
 import numpy as np
 import cv2
 import torch
-import copy
 
 from Crypto.Cipher import ChaCha20
 from models.experimental import attempt_load
@@ -21,19 +20,20 @@ if str(ROOT) not in sys.path:
     sys.path.append(str(ROOT))
 ROOT = Path(os.path.relpath(ROOT, Path.cwd()))
 
-KEY = b'0123456789ABCDEF0123456789ABCDEF'
-NONCE = b'12345678ABCD'
+KEY = b'0123456789ABCDEF0123456789ABCDEF'  # 32 bytes (256-bit key)
 
-def encrypt_region(region: np.ndarray, key: bytes = KEY, nonce: bytes = NONCE) -> np.ndarray:
+def encrypt_region(region: np.ndarray, key: bytes, nonce: bytes) -> np.ndarray:
     plaintext = region.tobytes()
     cipher = ChaCha20.new(key=key, nonce=nonce)
     ciphertext = cipher.encrypt(plaintext)
     enc_region = np.frombuffer(ciphertext, dtype=region.dtype).reshape(region.shape)
     return enc_region
 
+
 def load_model(weights, device):
     model = attempt_load(weights, map_location=device)
     return model
+
 
 def detect(model, source, device, project, name, exist_ok, save_img, view_img):
     img_size = 480
@@ -55,8 +55,7 @@ def detect(model, source, device, project, name, exist_ok, save_img, view_img):
         bs = 1
     vid_path, vid_writer = [None] * bs, [None] * bs
 
-    # 전체 좌표 저장용
-    all_face_data_dict = {}
+    all_face_data_np = {}
 
     for path, im, im0s, vid_cap in dataset:
         orgimg = im0s if isinstance(im0s, np.ndarray) else im0s.copy()
@@ -64,16 +63,16 @@ def detect(model, source, device, project, name, exist_ok, save_img, view_img):
 
         imgsz = check_img_size(img_size, s=model.stride.max())
         img = letterbox(img0, new_shape=imgsz)[0]
-        
-        img = img.transpose(2, 0, 1).copy()
+        img = np.ascontiguousarray(img.transpose(2, 0, 1))
         img = torch.from_numpy(img).to(device).float() / 255.0
         if img.ndimension() == 3:
             img = img.unsqueeze(0)
 
-        with torch.no_grad():
+        model.eval()
+        with torch.inference_mode():
             pred = model(img)[0]
             pred = non_max_suppression_face(pred, conf_thres, iou_thres)
-        print(len(pred[0]), 'face' if len(pred[0]) == 1 else 'faces')
+        print(len(pred[0]), 'face(s)')
 
         for i, det in enumerate(pred):
             if webcam:
@@ -82,33 +81,29 @@ def detect(model, source, device, project, name, exist_ok, save_img, view_img):
                 p, im0, frame = path, im0s.copy(), getattr(dataset, 'frame', 0)
             p = Path(p)
             save_path = str(Path(save_dir) / p.name)
-            json_path = str(Path(save_dir) / f"{p.stem}.json")
+
             face_data = []
 
             if len(det):
-                det[:, :4] = scale_coords(img.shape[2:], det[:, :4], im0.shape).round()
+                boxes = scale_coords(img.shape[2:], det[:, :4].clone(), im0.shape).round()
+                det = det.clone()
+                det[:, :4] = boxes
 
                 for j in range(det.size(0)):
                     xyxy = det[j, :4].view(-1).tolist()
                     x1, y1, x2, y2 = map(int, xyxy)
                     face_region = im0[y1:y2, x1:x2].copy()
 
-                    # 암호화
-                    enc_region = encrypt_region(face_region)
+                    nonce = frame.to_bytes(12, byteorder='big', signed=False)
+                    enc_region = encrypt_region(face_region, key=KEY, nonce=nonce)
                     im0[y1:y2, x1:x2] = enc_region
 
-                    # 좌표 저장
-                    face_data.append({'x1': x1, 'y1': y1, 'x2': x2, 'y2': y2})
+                    face_data.append([x1, y1, x2, y2])
 
             frame_key = f"frame_{frame}"
-            all_face_data_dict[frame_key] = face_data
+            face_array = np.array(face_data, dtype=np.uint16) if face_data else np.empty((0, 4), dtype=np.uint16)
+            all_face_data_np[frame_key] = face_array
 
-            # 일정 주기마다 저장
-            if frame % 1000 == 0:
-                with open(json_path, 'w') as f:
-                    json.dump(all_face_data_dict, f, indent=2)
-
-            # 이미지 또는 영상 저장
             if save_img:
                 if dataset.mode == 'image':
                     cv2.imwrite(save_path, im0)
@@ -130,10 +125,10 @@ def detect(model, source, device, project, name, exist_ok, save_img, view_img):
                     except Exception as e:
                         print(e)
 
-    # 마지막 저장
-    if len(all_face_data_dict) > 0:
-        with open(json_path, 'w') as f:
-            json.dump(all_face_data_dict, f, indent=2)
+    if len(all_face_data_np) > 0:
+        npz_path = str(Path(save_dir) / f"{p.stem}_faces.npz")
+        np.savez(npz_path, **all_face_data_np)
+
 
 if __name__ == '__main__':
     start_time = time.time()

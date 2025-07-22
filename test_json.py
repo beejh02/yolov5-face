@@ -8,7 +8,6 @@ import json
 import numpy as np
 import cv2
 import torch
-import copy
 
 from Crypto.Cipher import ChaCha20
 from models.experimental import attempt_load
@@ -21,19 +20,20 @@ if str(ROOT) not in sys.path:
     sys.path.append(str(ROOT))
 ROOT = Path(os.path.relpath(ROOT, Path.cwd()))
 
-KEY = b'0123456789ABCDEF0123456789ABCDEF'
-NONCE = b'12345678ABCD'
+KEY = b'0123456789ABCDEF0123456789ABCDEF'  # 32 bytes (256-bit key)
 
-def encrypt_region(region: np.ndarray, key: bytes = KEY, nonce: bytes = NONCE) -> np.ndarray:
+def encrypt_region(region: np.ndarray, key: bytes, nonce: bytes) -> np.ndarray:
     plaintext = region.tobytes()
     cipher = ChaCha20.new(key=key, nonce=nonce)
     ciphertext = cipher.encrypt(plaintext)
     enc_region = np.frombuffer(ciphertext, dtype=region.dtype).reshape(region.shape)
     return enc_region
 
+
 def load_model(weights, device):
     model = attempt_load(weights, map_location=device)
     return model
+
 
 def detect(model, source, device, project, name, exist_ok, save_img, view_img):
     img_size = 480
@@ -55,7 +55,6 @@ def detect(model, source, device, project, name, exist_ok, save_img, view_img):
         bs = 1
     vid_path, vid_writer = [None] * bs, [None] * bs
 
-    # 전체 좌표 저장용
     all_face_data_dict = {}
 
     for path, im, im0s, vid_cap in dataset:
@@ -64,7 +63,6 @@ def detect(model, source, device, project, name, exist_ok, save_img, view_img):
 
         imgsz = check_img_size(img_size, s=model.stride.max())
         img = letterbox(img0, new_shape=imgsz)[0]
-        
         img = img.transpose(2, 0, 1).copy()
         img = torch.from_numpy(img).to(device).float() / 255.0
         if img.ndimension() == 3:
@@ -93,22 +91,20 @@ def detect(model, source, device, project, name, exist_ok, save_img, view_img):
                     x1, y1, x2, y2 = map(int, xyxy)
                     face_region = im0[y1:y2, x1:x2].copy()
 
-                    # 암호화
-                    enc_region = encrypt_region(face_region)
+                    # 프레임 번호 기반 Nonce 생성 (12 bytes)
+                    nonce = frame.to_bytes(12, byteorder='big', signed=False)
+                    enc_region = encrypt_region(face_region, key=KEY, nonce=nonce)
                     im0[y1:y2, x1:x2] = enc_region
 
-                    # 좌표 저장
                     face_data.append({'x1': x1, 'y1': y1, 'x2': x2, 'y2': y2})
 
             frame_key = f"frame_{frame}"
             all_face_data_dict[frame_key] = face_data
 
-            # 일정 주기마다 저장
-            if frame % 1000 == 0:
+            if frame % 100 == 0:
                 with open(json_path, 'w') as f:
                     json.dump(all_face_data_dict, f, indent=2)
 
-            # 이미지 또는 영상 저장
             if save_img:
                 if dataset.mode == 'image':
                     cv2.imwrite(save_path, im0)
@@ -130,10 +126,10 @@ def detect(model, source, device, project, name, exist_ok, save_img, view_img):
                     except Exception as e:
                         print(e)
 
-    # 마지막 저장
     if len(all_face_data_dict) > 0:
         with open(json_path, 'w') as f:
             json.dump(all_face_data_dict, f, indent=2)
+
 
 if __name__ == '__main__':
     start_time = time.time()
