@@ -3,7 +3,6 @@ import time
 from pathlib import Path
 import sys
 import os
-import json
 
 import numpy as np
 import cv2
@@ -53,11 +52,10 @@ def detect(model, source, device, project, name, exist_ok, save_img, view_img):
     else:
         dataset = LoadImages(source, img_size=imgsz)
         bs = 1
-    vid_path, vid_writer = [None] * bs, [None] * bs
 
     all_face_data_np = {}
 
-    for path, im, im0s, vid_cap in dataset:
+    for frame_idx, (path, im, im0s, vid_cap) in enumerate(dataset):
         orgimg = im0s if isinstance(im0s, np.ndarray) else im0s.copy()
         img0 = orgimg
 
@@ -74,16 +72,10 @@ def detect(model, source, device, project, name, exist_ok, save_img, view_img):
             pred = non_max_suppression_face(pred, conf_thres, iou_thres)
         print(len(pred[0]), 'face(s)')
 
-        for i, det in enumerate(pred):
-            if webcam:
-                p, im0, frame = path[i], im0s[i].copy(), dataset.count
-            else:
-                p, im0, frame = path, im0s.copy(), getattr(dataset, 'frame', 0)
-            p = Path(p)
-            save_path = str(Path(save_dir) / p.name)
+        im0 = im0s.copy()
+        face_data = []
 
-            face_data = []
-
+        for det in pred:
             if len(det):
                 boxes = scale_coords(img.shape[2:], det[:, :4].clone(), im0.shape).round()
                 det = det.clone()
@@ -94,43 +86,23 @@ def detect(model, source, device, project, name, exist_ok, save_img, view_img):
                     x1, y1, x2, y2 = map(int, xyxy)
                     face_region = im0[y1:y2, x1:x2].copy()
 
-                    nonce = frame.to_bytes(12, byteorder='big', signed=False)
+                    nonce = frame_idx.to_bytes(12, byteorder='big', signed=False)
                     enc_region = encrypt_region(face_region, key=KEY, nonce=nonce)
                     im0[y1:y2, x1:x2] = enc_region
 
                     face_data.append([x1, y1, x2, y2])
 
-            frame_key = f"frame_{frame}"
-            face_array = np.array(face_data, dtype=np.uint16) if face_data else np.empty((0, 4), dtype=np.uint16)
-            all_face_data_np[frame_key] = face_array
+        frame_key = f"frame_{frame_idx}"
+        face_array = np.array(face_data, dtype=np.uint16) if face_data else np.empty((0, 4), dtype=np.uint16)
+        all_face_data_np[frame_key] = face_array
 
-            if save_img:
-                if dataset.mode == 'image':
-                    save_path = str(Path(save_path).with_suffix('.png'))  # 무손실 PNG 저장
-                    cv2.imwrite(save_path, im0)
-                else:
-                    if vid_path[i] != save_path:
-                        vid_path[i] = save_path
-                        if isinstance(vid_writer[i], cv2.VideoWriter):
-                            vid_writer[i].release()
-                        if vid_cap:
-                            fps = vid_cap.get(cv2.CAP_PROP_FPS)
-                            w = int(vid_cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-                            h = int(vid_cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-                        else:
-                            fps, w, h = 30, im0.shape[1], im0.shape[0]
-                        # FFV1 코덱 사용 (무손실), 확장자는 .avi 권장
-                        save_path = str(Path(save_path).with_suffix('.avi'))
-                        vid_writer[i] = cv2.VideoWriter(
-                            save_path, cv2.VideoWriter_fourcc(*'FFV1'), fps, (w, h)
-                        )
-                    try:
-                        vid_writer[i].write(im0)
-                    except Exception as e:
-                        print(e)
+        if save_img:
+            save_name = f"frame_{frame_idx:05d}.png"
+            save_path = str(Path(save_dir) / save_name)
+            cv2.imwrite(save_path, im0)
 
     if len(all_face_data_np) > 0:
-        npz_path = str(Path(save_dir) / f"{p.stem}_faces.npz")
+        npz_path = str(Path(save_dir) / f"faces.npz")
         np.savez(npz_path, **all_face_data_np)
 
 
@@ -152,3 +124,5 @@ if __name__ == '__main__':
     detect(model, opt.source, device, opt.project, opt.name, opt.exist_ok, opt.save_img, opt.view_img)
     end_time = time.time()
     print(f"\n총 실행 시간: {end_time - start_time:.2f}초")
+    print(f"\n🔧 병합하려면 다음 명령어 사용:")
+    print(f"   ffmpeg -framerate 30 -i frame_%05d.png -c:v ffv1 output.avi")

@@ -3,7 +3,6 @@ import time
 from pathlib import Path
 import sys
 import os
-import json
 
 import numpy as np
 import cv2
@@ -29,61 +28,52 @@ def encrypt_region(region: np.ndarray, key: bytes, nonce: bytes) -> np.ndarray:
     enc_region = np.frombuffer(ciphertext, dtype=region.dtype).reshape(region.shape)
     return enc_region
 
-
 def load_model(weights, device):
     model = attempt_load(weights, map_location=device)
     return model
-
 
 def detect(model, source, device, project, name, exist_ok, save_img, view_img):
     img_size = 480
     conf_thres = 0.6
     iou_thres = 0.5
-    imgsz = (img_size, img_size)
+    imgsz = check_img_size(img_size, s=model.stride.max())
+
     save_dir = increment_path(Path(project) / name, exist_ok=exist_ok)
     Path(save_dir).mkdir(parents=True, exist_ok=True)
+    output_video_path = str(Path(save_dir) / "output.avi")
 
     is_file = Path(source).suffix[1:] in (img_formats + vid_formats)
     is_url = source.lower().startswith(('rtsp://', 'rtmp://', 'http://', 'https://'))
     webcam = source.isnumeric() or source.endswith('.txt') or (is_url and not is_file)
 
-    if webcam:
-        dataset = LoadStreams(source, img_size=imgsz)
-        bs = 1
-    else:
-        dataset = LoadImages(source, img_size=imgsz)
-        bs = 1
-    vid_path, vid_writer = [None] * bs, [None] * bs
+    dataset = LoadStreams(source, img_size=imgsz) if webcam else LoadImages(source, img_size=imgsz)
+    bs = 1
+
+    model.eval()  # ✅ 최적화 6
 
     all_face_data_np = {}
+    video_writer = None
+    frame_size_initialized = False
 
-    for path, im, im0s, vid_cap in dataset:
-        orgimg = im0s if isinstance(im0s, np.ndarray) else im0s.copy()
-        img0 = orgimg
+    for frame_idx, (path, im, im0s, vid_cap) in enumerate(dataset):
+        img0 = im0s.copy() if isinstance(im0s, np.ndarray) else im0s  # ✅ 최적화 4+5
 
-        imgsz = check_img_size(img_size, s=model.stride.max())
         img = letterbox(img0, new_shape=imgsz)[0]
         img = np.ascontiguousarray(img.transpose(2, 0, 1))
         img = torch.from_numpy(img).to(device).float() / 255.0
         if img.ndimension() == 3:
             img = img.unsqueeze(0)
 
-        model.eval()
         with torch.inference_mode():
             pred = model(img)[0]
             pred = non_max_suppression_face(pred, conf_thres, iou_thres)
+
         print(len(pred[0]), 'face(s)')
 
-        for i, det in enumerate(pred):
-            if webcam:
-                p, im0, frame = path[i], im0s[i].copy(), dataset.count
-            else:
-                p, im0, frame = path, im0s.copy(), getattr(dataset, 'frame', 0)
-            p = Path(p)
-            save_path = str(Path(save_dir) / p.name)
+        im0 = img0.copy()
+        face_data = []
 
-            face_data = []
-
+        for det in pred:
             if len(det):
                 boxes = scale_coords(img.shape[2:], det[:, :4].clone(), im0.shape).round()
                 det = det.clone()
@@ -94,45 +84,30 @@ def detect(model, source, device, project, name, exist_ok, save_img, view_img):
                     x1, y1, x2, y2 = map(int, xyxy)
                     face_region = im0[y1:y2, x1:x2].copy()
 
-                    nonce = frame.to_bytes(12, byteorder='big', signed=False)
+                    nonce = frame_idx.to_bytes(12, byteorder='big', signed=False)
                     enc_region = encrypt_region(face_region, key=KEY, nonce=nonce)
                     im0[y1:y2, x1:x2] = enc_region
 
                     face_data.append([x1, y1, x2, y2])
 
-            frame_key = f"frame_{frame}"
-            face_array = np.array(face_data, dtype=np.uint16) if face_data else np.empty((0, 4), dtype=np.uint16)
-            all_face_data_np[frame_key] = face_array
+        if not frame_size_initialized:
+            h, w = im0.shape[:2]
+            fourcc = cv2.VideoWriter_fourcc(*'FFV1')  # Lossless
+            video_writer = cv2.VideoWriter(output_video_path, fourcc, 30.0, (w, h))
+            frame_size_initialized = True
 
-            if save_img:
-                if dataset.mode == 'image':
-                    save_path = str(Path(save_path).with_suffix('.png'))  # 무손실 PNG 저장
-                    cv2.imwrite(save_path, im0)
-                else:
-                    if vid_path[i] != save_path:
-                        vid_path[i] = save_path
-                        if isinstance(vid_writer[i], cv2.VideoWriter):
-                            vid_writer[i].release()
-                        if vid_cap:
-                            fps = vid_cap.get(cv2.CAP_PROP_FPS)
-                            w = int(vid_cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-                            h = int(vid_cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-                        else:
-                            fps, w, h = 30, im0.shape[1], im0.shape[0]
-                        # FFV1 코덱 사용 (무손실), 확장자는 .avi 권장
-                        save_path = str(Path(save_path).with_suffix('.avi'))
-                        vid_writer[i] = cv2.VideoWriter(
-                            save_path, cv2.VideoWriter_fourcc(*'FFV1'), fps, (w, h)
-                        )
-                    try:
-                        vid_writer[i].write(im0)
-                    except Exception as e:
-                        print(e)
+        video_writer.write(im0)
+
+        frame_key = f"frame_{frame_idx}"
+        face_array = np.array(face_data, dtype=np.uint16) if face_data else np.empty((0, 4), dtype=np.uint16)
+        all_face_data_np[frame_key] = face_array
+
+    if video_writer:
+        video_writer.release()
 
     if len(all_face_data_np) > 0:
-        npz_path = str(Path(save_dir) / f"{p.stem}_faces.npz")
+        npz_path = str(Path(save_dir) / f"faces.npz")
         np.savez(npz_path, **all_face_data_np)
-
 
 if __name__ == '__main__':
     start_time = time.time()
