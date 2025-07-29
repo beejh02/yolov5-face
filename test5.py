@@ -49,14 +49,17 @@ def detect(model, source, device, project, name, exist_ok, save_img, view_img):
     dataset = LoadStreams(source, img_size=imgsz) if webcam else LoadImages(source, img_size=imgsz)
     bs = 1
 
-    model.eval()  # ✅ 최적화 6
+    model.eval()
 
     all_face_data_np = {}
     video_writer = None
     frame_size_initialized = False
 
     for frame_idx, (path, im, im0s, vid_cap) in enumerate(dataset):
-        img0 = im0s.copy() if isinstance(im0s, np.ndarray) else im0s  # ✅ 최적화 4+5
+        if isinstance(im0s, list):
+            img0 = im0s[0].copy()
+        else:
+            img0 = im0s.copy()
 
         img = letterbox(img0, new_shape=imgsz)[0]
         img = np.ascontiguousarray(img.transpose(2, 0, 1))
@@ -67,8 +70,6 @@ def detect(model, source, device, project, name, exist_ok, save_img, view_img):
         with torch.inference_mode():
             pred = model(img)[0]
             pred = non_max_suppression_face(pred, conf_thres, iou_thres)
-
-        print(len(pred[0]), 'face(s)')
 
         im0 = img0.copy()
         face_data = []
@@ -92,7 +93,7 @@ def detect(model, source, device, project, name, exist_ok, save_img, view_img):
 
         if not frame_size_initialized:
             h, w = im0.shape[:2]
-            fourcc = cv2.VideoWriter_fourcc(*'FFV1')  # Lossless
+            fourcc = cv2.VideoWriter_fourcc(*'FFV1')
             video_writer = cv2.VideoWriter(output_video_path, fourcc, 30.0, (w, h))
             frame_size_initialized = True
 
@@ -102,18 +103,22 @@ def detect(model, source, device, project, name, exist_ok, save_img, view_img):
         face_array = np.array(face_data, dtype=np.uint16) if face_data else np.empty((0, 4), dtype=np.uint16)
         all_face_data_np[frame_key] = face_array
 
+        if frame_idx > 0 and frame_idx % 240 == 0:
+            npz_path = Path(save_dir) / "faces.npz"
+            np.savez(npz_path, **all_face_data_np)
+
     if video_writer:
         video_writer.release()
 
     if len(all_face_data_np) > 0:
-        npz_path = str(Path(save_dir) / f"faces.npz")
+        npz_path = Path(save_dir) / "faces.npz"
         np.savez(npz_path, **all_face_data_np)
 
 if __name__ == '__main__':
     start_time = time.time()
     parser = argparse.ArgumentParser()
     parser.add_argument('--weights', nargs='+', type=str, default='weights/yolov5n-face.pt')
-    parser.add_argument('--source', type=str, default='./myimages')
+    parser.add_argument('--source', type=str, default='0')
     parser.add_argument('--img-size', type=int, default=480)
     parser.add_argument('--project', default=ROOT / 'runs/detect')
     parser.add_argument('--name', default='exp')
@@ -126,4 +131,3 @@ if __name__ == '__main__':
     model = load_model(opt.weights, device)
     detect(model, opt.source, device, opt.project, opt.name, opt.exist_ok, opt.save_img, opt.view_img)
     end_time = time.time()
-    print(f"\n총 실행 시간: {end_time - start_time:.2f}초")

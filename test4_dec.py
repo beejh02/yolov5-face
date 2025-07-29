@@ -53,8 +53,8 @@ def decrypt_faces_in_video(video_path: str, face_npz_path: str, output_path: str
 
 if __name__ == '__main__':
     # 파일 경로
-    input_video = 'runs/detect/exp/output.avi'
-    face_npz = 'runs/detect/exp/faces.npz'
-    output_video = 'runs/detect/exp/decrypted.avi'
+    input_video = 'runs/detect/exp3/output.avi'
+    face_npz = 'runs/detect/exp3/faces.npz'
+    output_video = 'runs/detect/exp3/decrypted.avi'
 
     decrypt_faces_in_video(input_video, face_npz, output_video)
